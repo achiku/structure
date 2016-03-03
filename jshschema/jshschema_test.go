@@ -1,21 +1,12 @@
 package jshschema
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
-func TestGenerate(t *testing.T) {
+func TestNewGenerate(t *testing.T) {
 	testFilePath := "/Users/achiku/tmp/schema.json"
-	f, err := os.Open(testFilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	b, err := Generate(f, "testpackage")
+	b, err := Generate(testFilePath, "testpackage")
 	if err != nil {
 		t.Error(err)
 	}
-
 	t.Log(b)
 }

@@ -1,14 +1,12 @@
 package jshschema
 
 import (
-	"encoding/json"
-	"io"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
-	"github.com/lestrrat/go-jsref"
+	"github.com/lestrrat/go-jsschema"
 )
 
 // commonInitialisms is a set of common initialisms.
@@ -48,177 +46,196 @@ var commonInitialisms = map[string]bool{
 	"XML":   true,
 }
 
-var intToWordMap = []string{
-	"zero",
-	"one",
-	"two",
-	"three",
-	"four",
-	"five",
-	"six",
-	"seven",
-	"eight",
-	"nine",
-}
-
-const (
-	FormatDateTime Format = "date-time"
-	FormatEmail    Format = "email"
-	FormatHostname Format = "hostname"
-	FormatIPv4     Format = "ipv4"
-	FormatIPv6     Format = "ipv6"
-	FormatURI      Format = "uri"
-)
-
-type ItemSpec struct {
-	TupleMode bool
-	Schemas   SchemaList
-}
-type DependencyMap struct {
-	Names   map[string][]string
-	Schemas map[string]*Schema
-}
-type PrimitiveType int
-type PrimitiveTypes []PrimitiveType
-type Format string
-
-type Number struct {
-	Val         float64
-	Initialized bool
-}
-
-type Integer struct {
-	Val         int
-	Initialized bool
-}
-
-type Bool struct {
-	Val         bool
-	Default     bool
-	Initialized bool
-}
-
-const (
-	UnspecifiedType PrimitiveType = iota
-	NullType
-	IntegerType
-	StringType
-	ObjectType
-	ArrayType
-	BooleanType
-	NumberType
-)
-
-type SchemaList []*Schema
-
-type Schema struct {
-	ID          string             `json:"id,omitempty"`
-	Title       string             `json:"title,omitempty"`
-	Description string             `json:"description,omitempty"`
-	Default     interface{}        `json:"default,omitempty"`
-	Type        []string           `json:"type,omitempty"`
-	SchemaRef   string             `json:"$schema,omitempty"`
-	Definitions map[string]*Schema `json:"definitions,omitempty"`
-	Reference   string             `json:"$ref,omitempty"`
-	Format      Format             `json:"format,omitempty"`
-
-	// NumericValidations
-	MultipleOf       Number `json:"multipleOf,omitempty"`
-	Minimum          Number `json:"minimum,omitempty"`
-	Maximum          Number `json:"maximum,omitempty"`
-	ExclusiveMinimum Bool   `json:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum Bool   `json:"exclusiveMaximum,omitempty"`
-
-	// StringValidation
-	MaxLength Integer `json:"maxLength,omitempty"`
-	MinLength Integer `json:"minLength,omitempty"`
-
-	// ArrayValidations
-	AdditionalItems *AdditionalItems
-	Items           *ItemSpec
-	MinItems        Integer
-	MaxItems        Integer
-	UniqueItems     Bool
-
-	// ObjectValidations
-	MaxProperties        Integer                    `json:"maxProperties,omitempty"`
-	MinProperties        Integer                    `json:"minProperties,omitempty"`
-	Required             []string                   `json:"required,omitempty"`
-	Dependencies         DependencyMap              `json:"dependencies,omitempty"`
-	Properties           map[string]*Schema         `json:"properties,omitempty"`
-	AdditionalProperties *AdditionalProperties      `json:"additionalProperties,omitempty"`
-	PatternProperties    map[*regexp.Regexp]*Schema `json:"patternProperties,omitempty"`
-
-	Enum  []interface{} `json:"enum,omitempty"`
-	AllOf SchemaList    `json:"allOf,omitempty"`
-	AnyOf SchemaList    `json:"anyOf,omitempty"`
-	OneOf SchemaList    `json:"oneOf,omitempty"`
-	Not   *Schema       `json:"not,omitempty"`
-}
-
-type AdditionalItems struct {
-	*Schema
-}
-
-type AdditionalProperties struct {
-	*Schema
-}
-
-// Generate creates struct
-func Generate(input io.Reader, pkgName string) ([]byte, error) {
-	var schema Schema
-	if err := json.NewDecoder(input).Decode(&schema); err != nil {
+// Generate parse
+func Generate(schemaPath, pkgName string) ([]byte, error) {
+	s, err := schema.ReadFile(schemaPath)
+	if err != nil {
 		return nil, err
 	}
-	for k, v := range schema.Properties {
-		log.Println(k)
-		log.Println(v.Reference)
-		res := jsref.New()
-		tmp, err := res.Resolve(schema, v.Reference)
+
+	for name, pdef := range s.Properties {
+		log.Printf("## %s", fmtFieldName(name))
+		res, err := pdef.Resolve(nil)
 		if err != nil {
-			log.Println(err)
+			log.Fatal(err)
 		}
-		a := tmp.(*Schema)
-		for col, def := range a.Definitions {
-			log.Println(col)
-			log.Println(def)
-		}
+		igen(res, s, 0)
 	}
 	return nil, nil
 }
 
-func generateTypes(obj map[string]interface{}, depth int) string {
-	keys := make([]string, 0, len(obj))
-	for key := range obj {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		value := obj[key]
-
-		//If a nested value, recurse
-		switch value := value.(type) {
-		case []map[string]interface{}:
-			generateTypes(value[0], depth+1)
-		case map[string]interface{}:
-			generateTypes(value, depth+1)
-		}
-
-		res := jsref.New()
-		switch value := value.(type) {
-		case string:
-			if key == "$ref" {
-				s, err := res.Resolve(obj, value)
-				if err != nil {
-					log.Print(err)
-				}
-				log.Printf("%v", s)
+func igen(s *schema.Schema, root *schema.Schema, depth int) {
+	depth = depth + 1
+	for col, def := range s.Definitions {
+		// def is reference
+		if def.Reference != "" {
+			r, err := def.Resolve(nil)
+			if err != nil {
+				log.Fatal(err)
 			}
-			log.Println(strings.Repeat(" ", depth) + key + "->" + value)
-		case map[string]interface{}:
-			log.Println(strings.Repeat(" ", depth) + key)
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type))
+		} else if containsInt(schema.ObjectType, def.Type) {
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
+			stgen(def, root, depth)
+		} else {
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
 		}
 	}
-	return ""
+}
+
+func stgen(s *schema.Schema, root *schema.Schema, depth int) {
+	depth = depth + 1
+	for col, def := range s.Properties {
+		if def.Reference != "" {
+			r, err := def.Resolve(nil)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type))
+		} else if containsInt(schema.ObjectType, def.Type) {
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
+			stgen(def, root, depth)
+		} else {
+			log.Printf(
+				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
+		}
+	}
+}
+
+func typeForValue(types schema.PrimitiveTypes) []string {
+	var goTypes []string
+	for _, t := range types {
+		switch t {
+		case schema.StringType:
+			goTypes = append(goTypes, "string")
+		case schema.IntegerType:
+			goTypes = append(goTypes, "int")
+		case schema.NumberType:
+			goTypes = append(goTypes, "int")
+		case schema.BooleanType:
+			goTypes = append(goTypes, "bool")
+		case schema.ObjectType:
+			goTypes = append(goTypes, "struct")
+		}
+	}
+	return goTypes
+}
+
+func containsInt(s schema.PrimitiveType, l schema.PrimitiveTypes) bool {
+	for _, i := range l {
+		if i == s {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s string, l []string) bool {
+	sort.Strings(l)
+	i := sort.SearchStrings(l, s)
+	if i < len(l) && l[i] == s {
+		return true
+	}
+	return false
+}
+
+// fmtFieldName formats a string as a struct key
+//
+// Example:
+// 	fmtFieldName("foo_id")
+// Output: FooID
+func fmtFieldName(s string) string {
+	name := lintFieldName(s)
+	runes := []rune(name)
+	for i, c := range runes {
+		ok := unicode.IsLetter(c) || unicode.IsDigit(c)
+		if i == 0 {
+			ok = unicode.IsLetter(c)
+		}
+		if !ok {
+			runes[i] = '_'
+		}
+	}
+	return string(runes)
+}
+
+func lintFieldName(name string) string {
+	// Fast path for simple cases: "_" and all lowercase.
+	if name == "_" {
+		return name
+	}
+
+	for len(name) > 0 && name[0] == '_' {
+		name = name[1:]
+	}
+
+	allLower := true
+	for _, r := range name {
+		if !unicode.IsLower(r) {
+			allLower = false
+			break
+		}
+	}
+	if allLower {
+		runes := []rune(name)
+		if u := strings.ToUpper(name); commonInitialisms[u] {
+			copy(runes[0:], []rune(u))
+		} else {
+			runes[0] = unicode.ToUpper(runes[0])
+		}
+		return string(runes)
+	}
+
+	// Split camelCase at any lower->upper transition, and split on underscores.
+	// Check each word for common initialisms.
+	runes := []rune(name)
+	w, i := 0, 0 // index of start of word, scan
+	for i+1 <= len(runes) {
+		eow := false // whether we hit the end of a word
+
+		if i+1 == len(runes) {
+			eow = true
+		} else if runes[i+1] == '_' {
+			// underscore; shift the remainder forward over any run of underscores
+			eow = true
+			n := 1
+			for i+n+1 < len(runes) && runes[i+n+1] == '_' {
+				n++
+			}
+
+			// Leave at most one underscore if the underscore is between two digits
+			if i+n+1 < len(runes) && unicode.IsDigit(runes[i]) && unicode.IsDigit(runes[i+n+1]) {
+				n--
+			}
+
+			copy(runes[i+1:], runes[i+n+1:])
+			runes = runes[:len(runes)-n]
+		} else if unicode.IsLower(runes[i]) && !unicode.IsLower(runes[i+1]) {
+			// lower->non-lower
+			eow = true
+		}
+		i++
+		if !eow {
+			continue
+		}
+
+		// [w,i) is a word.
+		word := string(runes[w:i])
+		if u := strings.ToUpper(word); commonInitialisms[u] {
+			// All the common initialisms are ASCII,
+			// so we can replace the bytes exactly.
+			copy(runes[w:], []rune(u))
+
+		} else if strings.ToLower(word) == word {
+			// already all lowercase, and not the first word, so uppercase the first character.
+			runes[w] = unicode.ToUpper(runes[w])
+		}
+		w = i
+	}
+	return string(runes)
 }
