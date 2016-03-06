@@ -1,6 +1,8 @@
 package jshschema
 
 import (
+	"fmt"
+	"go/format"
 	"log"
 	"sort"
 	"strings"
@@ -46,47 +48,88 @@ var commonInitialisms = map[string]bool{
 	"XML":   true,
 }
 
+// Structure represents Go struct
+type Structure struct {
+	FieldName     string
+	FieldType     string
+	JSONFieldName string
+	JSONFieldMeta []string
+	Children      []*Structure
+}
+
+// String formatted struct
+func (s *Structure) String() string {
+	return ""
+}
+
+// Parse parses JSON Schema and returns Structure struct
+func Parse(schemaPath, pkgName string) *Structure {
+}
+
 // Generate parse
 func Generate(schemaPath, pkgName string) ([]byte, error) {
 	s, err := schema.ReadFile(schemaPath)
 	if err != nil {
 		return nil, err
 	}
+	src := igen(s, s, 0)
+	log.Println(src)
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		return nil, err
+	}
+	return formatted, nil
+}
 
+func igen(s *schema.Schema, root *schema.Schema, depth int) string {
+	structure := ""
+	depth = depth + 1
 	for name, pdef := range s.Properties {
-		log.Printf("## %s", fmtFieldName(name))
+		structure = fmt.Sprintf("%s type %s struct {\n", structure, fmtFieldName(name))
 		res, err := pdef.Resolve(nil)
 		if err != nil {
 			log.Fatal(err)
 		}
-		igen(res, s, 0)
-	}
-	return nil, nil
-}
-
-func igen(s *schema.Schema, root *schema.Schema, depth int) {
-	depth = depth + 1
-	for col, def := range s.Definitions {
-		// def is reference
-		if def.Reference != "" {
-			r, err := def.Resolve(nil)
-			if err != nil {
-				log.Fatal(err)
+		for col, def := range res.Definitions {
+			if def.Reference != "" {
+				r, err := def.Resolve(nil)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if containsInt(schema.ObjectType, def.Type) {
+					structure = fmt.Sprintf(
+						"%s %s%s %s {\n %s }\n",
+						structure,
+						strings.Repeat(" ", depth),
+						fmtFieldName(col),
+						typeForValue(def.Type)[0],
+						stgen(def, root, depth))
+				} else {
+					structure = fmt.Sprintf(
+						"%s %s%s %s\n", structure,
+						strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type)[0])
+				}
+			} else if containsInt(schema.ObjectType, def.Type) {
+				structure = fmt.Sprintf(
+					"%s %s%s %s {\n %s }\n",
+					structure,
+					strings.Repeat(" ", depth),
+					fmtFieldName(col),
+					typeForValue(def.Type)[0],
+					stgen(def, root, depth))
+			} else {
+				structure = fmt.Sprintf(
+					"%s %s%s %s\n", structure,
+					strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type)[0])
 			}
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type))
-		} else if containsInt(schema.ObjectType, def.Type) {
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
-			stgen(def, root, depth)
-		} else {
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
 		}
+		structure = fmt.Sprintf("%s}\n\n", structure)
 	}
+	return structure
 }
 
-func stgen(s *schema.Schema, root *schema.Schema, depth int) {
+func stgen(s *schema.Schema, root *schema.Schema, depth int) string {
+	structure := ""
 	depth = depth + 1
 	for col, def := range s.Properties {
 		if def.Reference != "" {
@@ -94,17 +137,34 @@ func stgen(s *schema.Schema, root *schema.Schema, depth int) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type))
+			if containsInt(schema.ObjectType, def.Type) {
+				structure = fmt.Sprintf(
+					"%s %s%s %s {\n %s }\n",
+					structure,
+					strings.Repeat(" ", depth),
+					fmtFieldName(col),
+					typeForValue(def.Type)[0],
+					stgen(def, root, depth))
+			} else {
+				structure = fmt.Sprintf(
+					"%s %s%s %s\n", structure,
+					strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type)[0])
+			}
 		} else if containsInt(schema.ObjectType, def.Type) {
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
-			stgen(def, root, depth)
+			structure = fmt.Sprintf(
+				"%s %s%s %s {\n %s }\n",
+				structure,
+				strings.Repeat(" ", depth),
+				fmtFieldName(col),
+				typeForValue(def.Type)[0],
+				stgen(def, root, depth))
 		} else {
-			log.Printf(
-				"%s%s: %v", strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type))
+			structure = fmt.Sprintf(
+				"%s %s%s %s\n", structure,
+				strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type)[0])
 		}
 	}
+	return structure
 }
 
 func typeForValue(types schema.PrimitiveTypes) []string {
