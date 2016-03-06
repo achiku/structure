@@ -1,10 +1,10 @@
-package jshschema
+package structure
 
 import "testing"
 
 func TestParse(t *testing.T) {
 	testFilePath := "/Users/achiku/tmp/schema.json"
-	st, err := Parse(testFilePath)
+	st, err := JSONParse(testFilePath)
 	if err != nil {
 		t.Error(err)
 	}

@@ -4,18 +4,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
-
-	"github.com/achiku/structure/jshschema"
 )
 
 func main() {
 	filePath := flag.String("f", "", "source file")
 	flag.Parse()
 
-	var st []*jshschema.Structure
+	var st []*Structure
 	var err error
 	if *filePath != "" {
-		st, err = jshschema.Parse(*filePath)
+		st, err = JSONParse(*filePath)
 		if err != nil {
 			log.Fatal(err)
 		}
