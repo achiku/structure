@@ -1,10 +1,9 @@
 package jshschema
 
 import (
+	"errors"
 	"fmt"
-	"go/format"
 	"log"
-	"sort"
 	"strings"
 	"unicode"
 
@@ -50,121 +49,98 @@ var commonInitialisms = map[string]bool{
 
 // Structure represents Go struct
 type Structure struct {
-	FieldName     string
-	FieldType     string
-	JSONFieldName string
-	JSONFieldMeta []string
-	Children      []*Structure
+	Name         string
+	Depth        int
+	Fields       map[string]string
+	ChildStructs []*Structure
 }
 
 // String formatted struct
-func (s *Structure) String() string {
-	return ""
+func (s *Structure) String(isTopLevel bool) string {
+	var str string
+	if isTopLevel {
+		str = fmt.Sprintf("type")
+	}
+	str = fmt.Sprintf("%s %s struct {\n", str, s.Name)
+	for f, t := range s.Fields {
+		str = fmt.Sprintf("%s %s%s %s\n", str, strings.Repeat(" ", s.Depth*2), f, t)
+	}
+	for _, c := range s.ChildStructs {
+		str = fmt.Sprintf("%s %s", str, c.String(false))
+	}
+	str = fmt.Sprintf("%s}\n\n ", str)
+	return str
 }
 
 // Parse parses JSON Schema and returns Structure struct
-func Parse(schemaPath, pkgName string) *Structure {
-}
-
-// Generate parse
-func Generate(schemaPath, pkgName string) ([]byte, error) {
+func Parse(schemaPath string) ([]*Structure, error) {
 	s, err := schema.ReadFile(schemaPath)
 	if err != nil {
 		return nil, err
 	}
-	src := igen(s, s, 0)
-	log.Println(src)
-	formatted, err := format.Source([]byte(src))
-	if err != nil {
-		return nil, err
-	}
-	return formatted, nil
-}
-
-func igen(s *schema.Schema, root *schema.Schema, depth int) string {
-	structure := ""
-	depth = depth + 1
-	for name, pdef := range s.Properties {
-		structure = fmt.Sprintf("%s type %s struct {\n", structure, fmtFieldName(name))
-		res, err := pdef.Resolve(nil)
+	var structures []*Structure
+	for structName, def := range s.Properties {
+		structure, err := generateFields(def, s, 0)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
-		for col, def := range res.Definitions {
-			if def.Reference != "" {
-				r, err := def.Resolve(nil)
-				if err != nil {
-					log.Fatal(err)
-				}
-				if containsInt(schema.ObjectType, def.Type) {
-					structure = fmt.Sprintf(
-						"%s %s%s %s {\n %s }\n",
-						structure,
-						strings.Repeat(" ", depth),
-						fmtFieldName(col),
-						typeForValue(def.Type)[0],
-						stgen(def, root, depth))
-				} else {
-					structure = fmt.Sprintf(
-						"%s %s%s %s\n", structure,
-						strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type)[0])
-				}
-			} else if containsInt(schema.ObjectType, def.Type) {
-				structure = fmt.Sprintf(
-					"%s %s%s %s {\n %s }\n",
-					structure,
-					strings.Repeat(" ", depth),
-					fmtFieldName(col),
-					typeForValue(def.Type)[0],
-					stgen(def, root, depth))
-			} else {
-				structure = fmt.Sprintf(
-					"%s %s%s %s\n", structure,
-					strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type)[0])
-			}
-		}
-		structure = fmt.Sprintf("%s}\n\n", structure)
+		structure.Name = fmtFieldName(structName)
+		structures = append(structures, structure)
 	}
-	return structure
+	return structures, nil
 }
 
-func stgen(s *schema.Schema, root *schema.Schema, depth int) string {
-	structure := ""
+func generateFields(s *schema.Schema, root *schema.Schema, depth int) (*Structure, error) {
 	depth = depth + 1
-	for col, def := range s.Properties {
+	if depth > 10 {
+		return nil, errors.New("the number of recursion exceeds 10")
+	}
+	st := &Structure{
+		Depth:  depth,
+		Fields: map[string]string{},
+	}
+	res, err := s.Resolve(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for fieldName, def := range res.Definitions {
 		if def.Reference != "" {
 			r, err := def.Resolve(nil)
 			if err != nil {
 				log.Fatal(err)
 			}
-			if containsInt(schema.ObjectType, def.Type) {
-				structure = fmt.Sprintf(
-					"%s %s%s %s {\n %s }\n",
-					structure,
-					strings.Repeat(" ", depth),
-					fmtFieldName(col),
-					typeForValue(def.Type)[0],
-					stgen(def, root, depth))
-			} else {
-				structure = fmt.Sprintf(
-					"%s %s%s %s\n", structure,
-					strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(r.Type)[0])
-			}
+			st.Fields[fmtFieldName(fieldName)] = typeForValue(r.Type)[0]
 		} else if containsInt(schema.ObjectType, def.Type) {
-			structure = fmt.Sprintf(
-				"%s %s%s %s {\n %s }\n",
-				structure,
-				strings.Repeat(" ", depth),
-				fmtFieldName(col),
-				typeForValue(def.Type)[0],
-				stgen(def, root, depth))
+			childStruct, err := generateFields(def, root, depth)
+			childStruct.Name = fmtFieldName(fieldName)
+			if err != nil {
+				return nil, err
+			}
+			st.ChildStructs = append(st.ChildStructs, childStruct)
 		} else {
-			structure = fmt.Sprintf(
-				"%s %s%s %s\n", structure,
-				strings.Repeat(" ", depth), fmtFieldName(col), typeForValue(def.Type)[0])
+			st.Fields[fmtFieldName(fieldName)] = typeForValue(def.Type)[0]
 		}
 	}
-	return structure
+
+	for fieldName, def := range res.Properties {
+		if def.Reference != "" {
+			r, err := def.Resolve(nil)
+			if err != nil {
+				log.Fatal(err)
+			}
+			st.Fields[fmtFieldName(fieldName)] = typeForValue(r.Type)[0]
+		} else if containsInt(schema.ObjectType, def.Type) {
+			childStruct, err := generateFields(def, root, depth)
+			childStruct.Name = fmtFieldName(fieldName)
+			if err != nil {
+				return nil, err
+			}
+			st.ChildStructs = append(st.ChildStructs, childStruct)
+		} else {
+			st.Fields[fmtFieldName(fieldName)] = typeForValue(def.Type)[0]
+		}
+	}
+	return st, nil
 }
 
 func typeForValue(types schema.PrimitiveTypes) []string {
@@ -181,6 +157,8 @@ func typeForValue(types schema.PrimitiveTypes) []string {
 			goTypes = append(goTypes, "bool")
 		case schema.ObjectType:
 			goTypes = append(goTypes, "struct")
+		case schema.ArrayType:
+			goTypes = append(goTypes, "struct")
 		}
 	}
 	return goTypes
@@ -191,15 +169,6 @@ func containsInt(s schema.PrimitiveType, l schema.PrimitiveTypes) bool {
 		if i == s {
 			return true
 		}
-	}
-	return false
-}
-
-func contains(s string, l []string) bool {
-	sort.Strings(l)
-	i := sort.SearchStrings(l, s)
-	if i < len(l) && l[i] == s {
-		return true
 	}
 	return false
 }
