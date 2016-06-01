@@ -2,6 +2,13 @@
 
 JSON Hyper Schema / WSDL to Go struct
 
+*Deprecated*
+
+Use the following libs.
+
+- https://github.com/moqada/pjsval
+- https://github.com/moqada/jsst
+
 ## Inspired by
 
 - https://github.com/ChimeraCoder/gojson
