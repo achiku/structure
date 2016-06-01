@@ -1,4 +1,4 @@
-package structure
+package main
 
 import "testing"
 

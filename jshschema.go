@@ -1,15 +1,16 @@
-package structure
+package main
 
 import (
 	"errors"
 	"log"
 
+	"github.com/lestrrat/go-jshschema"
 	"github.com/lestrrat/go-jsschema"
 )
 
 // JSONParse parses JSON Schema and returns Structure struct
 func JSONParse(schemaPath string) ([]*Structure, error) {
-	s, err := schema.ReadFile(schemaPath)
+	s, err := hschema.ReadFile(schemaPath)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +26,7 @@ func JSONParse(schemaPath string) ([]*Structure, error) {
 	return structures, nil
 }
 
-func generateFields(s *schema.Schema, root *schema.Schema, depth int) (*Structure, error) {
+func generateFields(s *schema.Schema, root *hschema.HyperSchema, depth int) (*Structure, error) {
 	depth = depth + 1
 	if depth > 10 {
 		return nil, errors.New("the number of recursion exceeds 10")
